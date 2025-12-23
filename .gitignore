@@ -1,0 +1,23 @@
+# Node / uni-app / Vite
+node_modules/
+dist/
+unpackage/
+.uniapp_cache/
+.unicloud/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Env / config
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

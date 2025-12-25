@@ -112,7 +112,7 @@
 </template>
 
 <script>
-import { fetchMe, updateMe, changePassword, clearToken, logoutSetting } from '@/services/api'
+import { fetchMe, updateMe, changePassword, clearToken, logoutSetting, uploadAvatar } from '@/services/api'
 
 export default {
   data() {
@@ -196,9 +196,23 @@ export default {
         count: 1,
         sizeType: ['compressed'],
         sourceType: ['album', 'camera'],
-        success: (res) => {
-          this.accountForm.avatar = res.tempFilePaths[0]
-          this.handleUpdateProfile({ profile: { avatar: this.accountForm.avatar } }, '头像已更新')
+        success: async (res) => {
+          const filePath = res.tempFilePaths[0]
+          if (!filePath) {
+            uni.showToast({ title: '未选择图片', icon: 'none' })
+            return
+          }
+          uni.showLoading({ title: '上传中...', mask: true })
+          try {
+            const { avatar } = await uploadAvatar(filePath)
+            this.accountForm.avatar = avatar
+            await this.handleUpdateProfile({ profile: { avatar } }, '头像已更新')
+          } catch (err) {
+            const msg = err?.data?.error || err?.data?.detail || '上传失败'
+            uni.showToast({ title: msg, icon: 'none' })
+          } finally {
+            uni.hideLoading()
+          }
         },
         fail: () => {
           uni.showToast({ title: '选择失败', icon: 'none' })

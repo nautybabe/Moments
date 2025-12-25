@@ -22,9 +22,9 @@
     <view class="section-title">我的动态</view>
     <view class="post-card" v-for="item in myPosts" :key="item.id">
       <view class="post-header">
-        <image class="avatar" :src="profile.avatar" mode="aspectFill" />
+        <image class="avatar" :src="item.avatar || profile.avatar" mode="aspectFill" />
         <view class="meta">
-          <text class="name">{{ profile.nickname }}</text>
+          <text class="name">{{ item.name || profile.nickname }}</text>
           <text class="time">{{ item.time }}</text>
         </view>
         <!-- 删除按钮 -->
@@ -33,17 +33,60 @@
       
       <view class="post-content">
         <text class="text">{{ item.text }}</text>
+        <!-- 标签显示 -->
+        <view class="tags-row" v-if="item.tags && item.tags.length">
+          <view class="tag" v-for="tag in item.tags" :key="tag">#{{ tag }}</view>
+        </view>
       </view>
       
-      <view class="media-grid" v-if="item.type === 'image'">
+      <!-- 1. 纯图片帖子 -->
+      <view class="media-grid" v-if="item.type === 'image' && item.media && item.media.length">
         <image
           v-for="(img, idx) in item.media"
           :key="idx"
           class="media-img"
           :src="img"
           mode="aspectFill"
+          @tap.stop="previewImage(item.media, idx)"
         />
       </view>
+
+      <!-- 2. 视频帖子：视频与附图并列展示 -->
+      <template v-else-if="item.type === 'video'">
+        <view class="video-wrapper" v-if="item.media && item.media.length">
+          <video
+            class="video-player"
+            :src="item.media[0]"
+            :poster="item.poster || item.media[1] || ''"
+            controls
+            :enable-progress-gesture="true"
+            show-progress="true"
+            object-fit="cover"
+          />
+        </view>
+        <view class="media-grid" v-if="item.extraImages && item.extraImages.length">
+          <image
+            v-for="(img, idx) in item.extraImages"
+            :key="idx"
+            class="media-img"
+            :src="img"
+            mode="aspectFill"
+            @tap.stop="previewImage(item.extraImages, idx)"
+          />
+        </view>
+      </template>
+
+      <!-- 3. 兜底显示 -->
+      <view class="media-grid" v-else-if="item.type !== 'image' && item.type !== 'video' && item.media && item.media.length">
+        <image
+          v-for="(img, idx) in item.media"
+          :key="idx"
+          class="media-img"
+          :src="img"
+          mode="aspectFit"
+        />
+      </view>
+      
       <view class="actions-row">
         <view class="action" @tap="toggleLike(item)">
           <text>{{ item.liked ? '❤️' : '🤍' }}</text>
@@ -122,7 +165,7 @@
 </template>
 
 <script>
-import { fetchMe } from '@/services/api'
+import { fetchMe, fetchMyPosts, deletePostApi } from '@/services/api'
 export default {
   data() {
     return {
@@ -132,30 +175,9 @@ export default {
         nickname: '小程序用户',
         signature: '记录生活 · 分享精彩'
       },
-      myPosts: [
-        {
-          id: 101,
-          time: '昨天 21:30',
-          text: '备忘：下周和朋友去露营，记得带咖啡壶。',
-          type: 'image',
-          media: ['https://picsum.photos/400?7'],
-          likes: 5,
-          comments: 2,
-          liked: false
-        },
-        {
-          id: 102,
-          time: '3天前',
-          text: '小程序 UI 草稿完成，准备上线～',
-          type: 'image',
-          media: ['https://picsum.photos/400?8', 'https://picsum.photos/400?9'],
-          likes: 8,
-          comments: 1,
-          liked: true
-        }
-      ],
+      myPosts: [],
       myStats: {
-        posts: 24
+        posts: 0
       },
       showDeleteModal: false,
       deletePostId: null,
@@ -173,9 +195,11 @@ export default {
     // 监听发布事件，把自己的帖子加入列表
     this.__newMyPostHandler = (payload = {}) => {
       if (payload.myPost) {
+        const dedupMedia = Array.from(new Set(payload.myPost.media || []))
         this.myPosts.unshift({
           ...payload.myPost,
           id: payload.myPost.id || Date.now(),
+          media: dedupMedia,
           likes: payload.myPost.likes || 0,
           comments: payload.myPost.comments || 0,
           liked: false
@@ -187,7 +211,7 @@ export default {
     uni.$on('newPostPublished', this.__newMyPostHandler)
 
     // 监听个人资料更新
-    this.__profileUpdatedHandler = (payload = {}) => {
+    this.__profileUpdatedHandler = async (payload = {}) => {
       const { avatar, nickname, signature } = payload
       if (avatar) this.profile.avatar = avatar
       if (nickname) this.profile.nickname = nickname
@@ -205,6 +229,7 @@ export default {
     this.setStatusBar()
     this.loadProfileFromStorage()
     this.pullProfile()
+    this.loadMyPosts()
   },
   onUnload() {
     if (this.__newMyPostHandler) {
@@ -217,6 +242,20 @@ export default {
     }
   },
   methods: {
+    formatTime(ts) {
+      if (!ts) return ''
+      const date = new Date(ts)
+      const diff = Date.now() - date.getTime()
+      const sec = Math.floor(diff / 1000)
+      if (sec < 60) return '刚刚'
+      const min = Math.floor(sec / 60)
+      if (min < 60) return `${min}分钟前`
+      const hour = Math.floor(min / 60)
+      if (hour < 24) return `${hour}小时前`
+      const day = Math.floor(hour / 24)
+      if (day < 7) return `${day}天前`
+      return date.toLocaleDateString()
+    },
     setStatusBar() {
       try {
         const info = uni.getSystemInfoSync()
@@ -230,6 +269,7 @@ export default {
         const stored = uni.getStorageSync('current_user') || {}
         const profileData = stored.profile || {}
         const nickname = stored.username || stored.nickname || '小程序用户'
+
         const signature = profileData.signature || stored.signature || '记录生活 · 分享精彩'
         const avatar = profileData.avatar || stored.avatar || this.profile.avatar
         this.profile.nickname = nickname
@@ -239,10 +279,12 @@ export default {
         this.myPosts = this.myPosts.map(p => ({
           ...p,
           name: nickname,
-          avatar: avatar || p.avatar
+          avatar: avatar || p.avatar,
+          likes: p.likes || 0,
+          comments: p.comments || 0
         }))
       } catch (e) {
-        console.warn('load profile failed', e)
+        // 静默失败
       }
     },
     async pullProfile() {
@@ -250,16 +292,102 @@ export default {
         const data = await fetchMe()
         // 更新本地缓存和界面
         uni.setStorageSync('current_user', data)
-        this.profile.nickname = data.username || this.profile.nickname
-        const profileData = data.profile || {}
-        this.profile.signature = profileData.signature || this.profile.signature || '记录生活 · 分享精彩'
-        this.profile.avatar = profileData.avatar || this.profile.avatar
+        this.profile.nickname = data.username || data.nickname || '小程序用户'
+        this.profile.signature = data.profile.signature || data.signature || '记录生活 · 分享精彩'
+        this.profile.avatar = data.profile.avatar || data.avatar || this.profile.avatar
         // 同步已有列表的头像/昵称
         this.myPosts = this.myPosts.map(p => ({
           ...p,
           avatar: this.profile.avatar,
-          name: this.profile.nickname
+          name: this.profile.nickname,
+          likes: p.likes || 0,
+          comments: p.comments || 0,
+          liked: p.liked || false
         }))
+      } catch (e) {
+        // 静默失败
+      }
+    },
+    async loadMyPosts() {
+      try {
+        const list = await fetchMyPosts()
+        this.myPosts = (list || []).map(item => {
+          const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+
+          const normalizeUrl = (url) => {
+            if (!url) return ''
+            const fixedSlashes = url.replace(/\\/g, '/')
+            if (/^https?:\/\//i.test(fixedSlashes)) return fixedSlashes
+            if (fixedSlashes.startsWith('/media/')) return `${API_BASE}${fixedSlashes}`
+            return fixedSlashes
+          }
+
+          const mediaList = (item.media || [])
+            .filter(Boolean)
+            .map(normalizeUrl)
+          // 去重，避免重复图片
+          const dedupedMediaList = Array.from(new Set(mediaList))
+
+          let type = item.type || (dedupedMediaList.length > 0 ? 'image' : 'text')
+          if (type === 'text' && dedupedMediaList.length > 0) type = 'image'
+          const created = item.created_at || item.created_time || ''
+
+          let poster = item.poster ? normalizeUrl(item.poster) : ''
+          let mediaForRender = dedupedMediaList
+          let extraImages = []
+
+          if (type === 'video') {
+            const imageRegex = /\.(png|jpe?g|webp|gif)$/i
+            let videoUrl = ''
+            const images = []
+            dedupedMediaList.forEach(url => {
+              if (!url) return
+              const isImage = imageRegex.test(url)
+              const looksLikeVideo = url.includes('/uploads/videos/') || /\.mp4$/i.test(url)
+              if (!videoUrl && (looksLikeVideo || !isImage)) {
+                videoUrl = url
+              } else if (isImage) {
+                images.push(url)
+              }
+            })
+            if (!videoUrl && images.length) {
+              // 实际没有视频，用图片渲染
+              type = 'image'
+              mediaForRender = images
+              extraImages = []
+              poster = ''
+            } else {
+              // 仅使用后端返回的 poster，避免把附图当成封面
+              if (!poster || poster.includes('/uploads/videos/')) {
+                poster = ''
+              }
+              mediaForRender = videoUrl ? [videoUrl] : []
+              // 附图去重展示
+              extraImages = Array.from(new Set(images))
+            }
+          } else {
+            // 纯图片帖子，直接使用去重后的列表
+            extraImages = []
+            mediaForRender = dedupedMediaList
+          }
+
+          return {
+            id: item.id,
+            time: item.time || this.formatTime(created),
+            text: item.text || '',
+            type,
+            media: mediaForRender,
+            poster,
+            extraImages,
+            likes: item.likes_count || item.likes || 0,
+            comments: item.comments_count || item.comments || 0,
+            liked: item.is_liked || false,
+            avatar: item.user?.profile?.avatar || this.profile.avatar,
+            name: item.user?.username || this.profile.nickname,
+            tags: item.tags || []
+          }
+        })
+        this.myStats.posts = this.myPosts.length
       } catch (e) {
         // 静默失败
       }
@@ -276,6 +404,7 @@ export default {
         url: '/pages/settings/settings'
       })
     },
+
     // 删除功能相关方法
     handleDelete(item) {
       this.deletePostId = item.id
@@ -288,29 +417,47 @@ export default {
     confirmDelete() {
       if (!this.deletePostId) return
       
-      // 找到要删除的帖子索引
-      const index = this.myPosts.findIndex(item => item.id === this.deletePostId)
-      if (index !== -1) {
-        // 从数组中移除
-        this.myPosts.splice(index, 1)
-        // 更新帖子数量统计
-        this.myStats.posts = Math.max(0, this.myStats.posts - 1)
-        
-        // 删除对应的评论数据
-        delete this.commentsData[this.deletePostId]
-        
-        // 如果当前打开的评论弹窗是删除的帖子，关闭评论弹窗
-        if (this.currentPostId === this.deletePostId) {
-          this.closeCommentModal()
-        }
-        
-        uni.showToast({
-          title: '删除成功',
-          icon: 'success'
+      // 调用后端删除API
+      deletePostApi({ postId: this.deletePostId })
+        .then(response => {
+          if (response.success) {
+            // 从前端数组中移除
+            const index = this.myPosts.findIndex(item => item.id === this.deletePostId)
+            if (index !== -1) {
+              this.myPosts.splice(index, 1)
+              // 更新帖子数量统计
+              this.myStats.posts = Math.max(0, this.myStats.posts - 1)
+              
+              // 删除对应的评论数据
+              delete this.commentsData[this.deletePostId]
+              
+              // 如果当前打开的评论弹窗是删除的帖子，关闭评论弹窗
+              if (this.currentPostId === this.deletePostId) {
+                this.closeCommentModal()
+              }
+            }
+            
+            uni.showToast({
+              title: '删除成功',
+              icon: 'success'
+            })
+          } else {
+            uni.showToast({
+              title: response.message || '删除失败',
+              icon: 'none'
+            })
+          }
         })
-      }
-      
-      this.closeDeleteModal()
+        .catch(error => {
+          console.error('删除失败:', error)
+          uni.showToast({
+            title: '删除失败，请重试',
+            icon: 'none'
+          })
+        })
+        .finally(() => {
+          this.closeDeleteModal()
+        })
     },
     
     toggleLike(item) {
@@ -363,6 +510,13 @@ export default {
         this.submittingComment = false
         uni.showToast({ title: '评论成功', icon: 'success' })
       }, 500)
+    },
+    previewImage(urls, current = 0) {
+      if (!urls || !urls.length) return
+      uni.previewImage({
+        urls,
+        current
+      })
     }
   }
 }
@@ -383,6 +537,8 @@ export default {
   width: 100%;
   padding: 20rpx 24rpx 40rpx;
   box-sizing: border-box;
+  flex: 1;
+  height: 100vh;
 }
 
 .section-title {
@@ -533,6 +689,22 @@ export default {
   font-size: 30rpx;
   line-height: 1.6;
   margin-bottom: 16rpx;
+}
+
+.tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-bottom: 16rpx;
+}
+
+.tag {
+  padding: 6rpx 12rpx;
+  background: #f0f0f0;
+  color: #666;
+  font-size: 24rpx;
+  border-radius: 12rpx;
+  white-space: nowrap;
 }
 
 .media-grid {

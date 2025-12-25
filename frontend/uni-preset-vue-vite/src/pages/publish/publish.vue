@@ -130,6 +130,7 @@
 </template>
 
 <script>
+import { uploadPostImage, uploadPostVideo, createPost, fetchMe } from '@/services/api'
 export default {
   data() {
     return {
@@ -154,6 +155,11 @@ export default {
     }
   },
   onLoad() {
+    // 初始化用户信息
+    const cached = uni.getStorageSync('current_user')
+    if (cached?.profile?.avatar) this.currentUser.avatar = cached.profile.avatar
+    if (cached?.username) this.currentUser.nickname = cached.username
+    this.pullUser()
     // 监听个人资料更新
     this.__profileUpdatedHandler = (payload = {}) => {
       const { avatar, nickname } = payload
@@ -169,6 +175,27 @@ export default {
     }
   },
   methods: {
+    formatTime(ts) {
+      const diff = Date.now() - ts
+      const seconds = Math.floor(diff / 1000)
+      if (seconds < 60) return '刚刚'
+      const minutes = Math.floor(seconds / 60)
+      if (minutes < 60) return `${minutes}分钟前`
+      const hours = Math.floor(minutes / 60)
+      if (hours < 24) return `${hours}小时前`
+      const days = Math.floor(hours / 24)
+      if (days < 7) return `${days}天前`
+      return new Date(ts).toLocaleDateString()
+    },
+    async pullUser() {
+      try {
+        const data = await fetchMe()
+        if (data?.profile?.avatar) this.currentUser.avatar = data.profile.avatar
+        if (data?.username) this.currentUser.nickname = data.username
+      } catch (e) {
+        // ignore
+      }
+    },
     handleCancel() {
       // 如果有内容，提示确认
       if (this.content.trim() || this.images.length > 0 || this.video) {
@@ -299,85 +326,69 @@ export default {
         return
       }
 
-      // 显示发布中状态
       uni.showLoading({ title: '发布中...', mask: true })
 
       try {
-        // 这里应该调用实际的API上传接口
-        // 模拟上传过程
-        await new Promise(resolve => setTimeout(resolve, 1500))
+        // 上传图片
+        const uploadedImages = []
+        for (const path of this.images) {
+          const url = await uploadPostImage(path)
+          uploadedImages.push(url)
+        }
 
-        // 构建发布数据
-        const publishData = {
+        // 上传视频（可选）
+        let videoUrl = ''
+        let videoPosterUrl = ''
+        if (this.video) {
+          const { url, poster } = await uploadPostVideo(this.video)
+          videoUrl = url
+          videoPosterUrl = poster || ''
+        }
+
+        // 构建并提交
+        const payload = {
           content: this.content.trim(),
-          images: this.images,
-          video: this.video,
-          videoPoster: this.videoPoster,
-          tags: this.selectedTags,
-          timestamp: Date.now()
+          images: uploadedImages,
+          video: videoUrl,
+          videoPoster: videoPosterUrl,
+          tags: this.selectedTags
         }
 
-        // TODO: 调用实际的上传API
-        console.log('发布数据:', publishData)
+        const res = await createPost(payload)
 
-        // 格式化时间显示
-        const formatTime = (timestamp) => {
-          const now = Date.now()
-          const diff = now - timestamp
-          const minutes = Math.floor(diff / 60000)
-          if (minutes < 1) return '刚刚'
-          if (minutes < 60) return `${minutes}分钟前`
-          const hours = Math.floor(minutes / 60)
-          if (hours < 24) return `${hours}小时前`
-          const days = Math.floor(hours / 24)
-          if (days < 7) return `${days}天前`
-          return new Date(timestamp).toLocaleDateString()
-        }
+        // 用后端返回的创建时间，如无则用当前时间
+        const nowTs = Date.now()
+        const createdAt = res?.data?.created_at ? new Date(res.data.created_at).getTime() : nowTs
+        const displayTime = this.formatTime(createdAt)
+        const type = payload.video ? 'video' : (payload.images.length > 0 ? 'image' : 'text')
+        const media = payload.video ? [payload.video, payload.videoPoster].filter(Boolean) : payload.images
 
-        // 构建新帖子数据（用于添加到首页）
-        const newPost = {
-          id: Date.now(), // 使用时间戳作为ID
-          name: this.currentUser.nickname || '我',
-          avatar: this.currentUser.avatar || 'https://picsum.photos/200',
-          isMine: true,
-          time: formatTime(publishData.timestamp),
-          text: publishData.content,
-          type: publishData.video ? 'video' : (publishData.images.length > 0 ? 'image' : 'text'),
-          media: publishData.video ? publishData.video : publishData.images,
-          poster: publishData.videoPoster || '',
-          tag: publishData.tags.length > 0 ? publishData.tags[0] : '',
-          tags: publishData.tags,
-          likes: 0,
-          comments: 0,
-          liked: false
-        }
-
-        // 构建我的动态数据
-        const myPost = {
-          id: Date.now(),
-          time: formatTime(publishData.timestamp),
-          text: publishData.content,
-          type: publishData.video ? 'video' : (publishData.images.length > 0 ? 'image' : 'text'),
-          media: publishData.video ? publishData.video : publishData.images,
-          avatar: this.currentUser.avatar || 'https://picsum.photos/200',
-          name: this.currentUser.nickname || '我',
-          poster: publishData.videoPoster || '',
-          isMine: true
-        }
-
-        // 通过事件总线通知首页更新
+        // 通过事件总线通知首页/我的页
         uni.$emit('newPostPublished', {
-          discoverPost: newPost,
-          myPost: myPost
+          myPost: {
+            id: res?.data?.id || nowTs,
+            time: displayTime,
+            text: payload.content,
+            type,
+            media,
+            avatar: this.currentUser.avatar || 'https://picsum.photos/200',
+            name: this.currentUser.nickname || '我',
+            poster: payload.videoPoster || '',
+            isMine: true,
+            likes: 0,
+            comments: 0,
+            liked: false
+          }
         })
 
-        uni.hideLoading()
         uni.showToast({ title: '发布成功', icon: 'success' })
-
-        // 延迟返回，让用户看到成功提示
-        setTimeout(() => {
-          uni.navigateBack()
-        }, 1500)
+        this.content = ''
+        this.images = []
+        this.video = ''
+        this.videoPoster = ''
+        this.selectedTags = []
+        this.hideTagSelector()
+        setTimeout(() => uni.navigateBack(), 800)
       } catch (error) {
         uni.hideLoading()
         uni.showToast({ title: '发布失败，请重试', icon: 'none' })

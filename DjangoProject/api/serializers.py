@@ -126,11 +126,12 @@ class PostSerializer(serializers.ModelSerializer):
     comment = serializers.SerializerMethodField(read_only=True)
     is_liked = serializers.SerializerMethodField(read_only=True)
     time = serializers.SerializerMethodField(read_only=True)
+    tags = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Post
-        fields = ['id', 'user', 'text', 'type', 'media', 'created_at', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time']
-        read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time']
+        fields = ['id', 'user', 'text', 'type', 'media', 'created_at', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags']
+        read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags']
 
     def get_comment(self, obj):
         """获取该动态的最新3条评论"""
@@ -161,6 +162,10 @@ class PostSerializer(serializers.ModelSerializer):
         else:
             # 超过一周
             return obj.created_at.strftime("%m-%d %H:%M")
+
+    def get_tags(self, obj):
+        """获取动态的标签列表"""
+        return [tag.name for tag in obj.tags.all()]
 
 
 class CreatePostSerializer(serializers.ModelSerializer):

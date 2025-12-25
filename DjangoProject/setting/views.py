@@ -5,6 +5,10 @@ from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+from django.conf import settings
+import os
 
 from api.serializers import UserSerializer, UserUpdateSerializer, PasswordChangeSerializer
 
@@ -15,12 +19,46 @@ def me(request):
     """获取或更新当前用户信息"""
     if request.method == "GET":
         serializer = UserSerializer(request.user)
-        return Response(serializer.data)
+        data = serializer.data
+        profile = data.get("profile") or {}
+        avatar = profile.get("avatar")
+        if avatar and not avatar.startswith("http"):
+            profile["avatar"] = request.build_absolute_uri(avatar)
+            data["profile"] = profile
+        return Response(data)
 
     serializer = UserUpdateSerializer(request.user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    return Response(UserSerializer(user).data)
+    data = UserSerializer(user).data
+    profile = data.get("profile") or {}
+    avatar = profile.get("avatar")
+    if avatar and not avatar.startswith("http"):
+        profile["avatar"] = request.build_absolute_uri(avatar)
+        data["profile"] = profile
+    return Response(data)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_avatar(request):
+    """上传头像并返回可访问URL"""
+    file_obj = request.FILES.get("file")
+    if not file_obj:
+        return Response({"error": "未收到文件"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # 统一存储到 media/avatars/<user_id>/filename
+    user_id = request.user.id
+    avatars_dir = os.path.join("avatars", str(user_id))
+    filename = default_storage.save(os.path.join(avatars_dir, file_obj.name), ContentFile(file_obj.read()))
+    avatar_url = request.build_absolute_uri(settings.MEDIA_URL + filename)
+
+    # 保存到用户资料
+    profile = getattr(request.user, "profile", None)
+    if profile:
+        profile.avatar = avatar_url
+        profile.save()
+
+    return Response({"avatar": avatar_url})
 
 
 @api_view(["POST"])

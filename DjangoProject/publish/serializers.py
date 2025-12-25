@@ -7,8 +7,8 @@ class CreatePostSerializer(serializers.ModelSerializer):
     """发布动态序列化器"""
     content = serializers.CharField(source='text', required=False)
     images = serializers.ListField(required=False, default=[])
-    video = serializers.CharField(required=False, default='')
-    videoPoster = serializers.CharField(required=False, default='')
+    video = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+    videoPoster = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=[])
     
     class Meta:

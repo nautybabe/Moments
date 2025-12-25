@@ -152,7 +152,7 @@ def toggle_like(request, post_id):
             'message': '动态不存在'
         }, status=status.HTTP_404_NOT_FOUND)
 
-@api_view(['GET', 'POST'])
+@api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def post_comments(request, post_id):
     """获取动态评论列表和发布评论接口"""
@@ -203,6 +203,37 @@ def post_comments(request, post_id):
                 'message': '评论失败',
                 'errors': serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
+    except Post.DoesNotExist:
+        return Response({
+            'success': False,
+            'message': '动态不存在'
+        }, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_post(request, post_id):
+    """删除动态接口"""
+    try:
+        post = Post.objects.get(id=post_id)
+        
+        # 检查是否是动态的作者
+        if post.user != request.user:
+            return Response({
+                'success': False,
+                'message': '只能删除自己的动态'
+            }, status=status.HTTP_403_FORBIDDEN)
+        
+        # 删除相关的点赞和评论
+        Like.objects.filter(post=post).delete()
+        Comment.objects.filter(post=post).delete()
+        
+        # 删除动态
+        post.delete()
+        
+        return Response({
+            'success': True,
+            'message': '删除成功'
+        })
     except Post.DoesNotExist:
         return Response({
             'success': False,

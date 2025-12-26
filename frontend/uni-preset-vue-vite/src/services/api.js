@@ -178,10 +178,13 @@ export async function logoutSetting() {
 }
 
 // Posts API
-export async function getPostsApi() {
+// 首页/发现页动态列表（统一用搜索接口，返回 api.Post ID，保持与搜索/我的动态一致）
+export async function getPostsApi({ page = 1, pageSize = 20 } = {}) {
   return request({
-    url: '/posts/',
-    method: 'GET'
+    url: '/search',
+    method: 'GET',
+    data: { page, pageSize },
+    header: { ...authHeader() }
   });
 }
 
@@ -194,10 +197,12 @@ export async function likePostApi({ postId, liked }) {
   });
 }
 
-export async function getCommentsApi({ postId }) {
+export async function getCommentsApi({ postId, page = 1, pageSize = 200 }) {
   return request({
     url: `/posts/${postId}/comments/`,
-    method: 'GET'
+    method: 'GET',
+    data: { page, pageSize },
+    header: { ...authHeader() }
   });
 }
 
@@ -218,6 +223,85 @@ export async function deletePostApi({ postId }) {
   });
 }
 
+
+// Follow APIs
+export async function followUserApi({ userId }) {
+  return request({
+    url: `/follow/${userId}/`,
+    method: 'POST',
+    header: { ...authHeader() }
+  });
+}
+
+export async function unfollowUserApi({ userId }) {
+  return request({
+    url: `/unfollow/${userId}/`,
+    method: 'POST',
+    header: { ...authHeader() }
+  });
+}
+
+export async function listFollowingApi() {
+  return request({
+    url: '/following/',
+    method: 'GET',
+    header: { ...authHeader() }
+  });
+}
+
+export async function listFollowersApi() {
+  return request({
+    url: '/followers/',
+    method: 'GET',
+    header: { ...authHeader() }
+  });
+}
+
+// Friend APIs
+export async function sendFriendRequestApi({ toUserId }) {
+  return request({
+    url: '/friends/request/',
+    method: 'POST',
+    data: { to_user_id: toUserId },
+    header: { ...authHeader() }
+  });
+}
+
+export async function respondFriendRequestApi({ requestId, action }) {
+  return request({
+    url: `/friends/${requestId}/respond/`,
+    method: 'POST',
+    data: { action },
+    header: { ...authHeader() }
+  });
+}
+
+export async function listFriendRequestsApi() {
+  return request({
+    url: '/friends/requests/',
+    method: 'GET',
+    header: { ...authHeader() }
+  });
+}
+
+export async function listFriendsApi() {
+  return request({
+    url: '/friends/',
+    method: 'GET',
+    header: { ...authHeader() }
+  });
+}
+
+// Search API (posts + users)
+export async function searchApi({ keyword = '', tag = '', date = '', page = 1, pageSize = 20 }) {
+  return request({
+    url: '/search',
+    method: 'GET',
+    data: { keyword, tag, date, page, pageSize },
+    header: { ...authHeader() }
+  });
+}
+
 // Notifications API
 export async function getNotificationsApi() {
   return request({
@@ -227,11 +311,18 @@ export async function getNotificationsApi() {
   });
 }
 
-export async function markAsReadApi({ notificationIds = [] }) {
+export async function markNotificationReadApi(notificationId) {
   return request({
-    url: '/notifications/mark-as-read/',
-    method: 'POST',
-    data: { notificationIds },
+    url: `/notifications/${notificationId}/read/`,
+    method: 'PUT',
+    header: { ...authHeader() }
+  });
+}
+
+export async function markAllNotificationsReadApi() {
+  return request({
+    url: '/notifications/read-all/',
+    method: 'PUT',
     header: { ...authHeader() }
   });
 }

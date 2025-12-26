@@ -16,6 +16,7 @@
       <view class="profile-actions">
         <button size="mini" class="profile-btn primary" @tap="handlePublish">发动态</button>
         <button size="mini" class="profile-btn" @tap="handleSettings">设置</button>
+        <button size="mini" class="profile-btn" @tap="goFriendList">好友</button>
       </view>
     </view>
 
@@ -27,8 +28,13 @@
           <text class="name">{{ item.name || profile.nickname }}</text>
           <text class="time">{{ item.time }}</text>
         </view>
-        <!-- 删除按钮 -->
-        <view class="delete-btn" @tap="handleDelete(item)">删除</view>
+        <view class="tag-wrap">
+          <text class="visibility" :class="`vis-${item.visibility || 'public'}`">
+            {{ visLabel(item.visibility) }}
+          </text>
+          <!-- 删除按钮 -->
+          <view class="delete-btn" @tap="handleDelete(item)">删除</view>
+        </view>
       </view>
       
       <view class="post-content">
@@ -40,41 +46,40 @@
       </view>
       
       <!-- 1. 纯图片帖子 -->
-      <view class="media-grid" v-if="item.type === 'image' && item.media && item.media.length">
+      <view class="media-grid" v-if="item.type === 'image' && (item.mediaImages || item.media)">
         <image
-          v-for="(img, idx) in item.media"
+          v-for="(img, idx) in (item.mediaImages || item.media)"
           :key="idx"
           class="media-img"
           :src="img"
           mode="aspectFill"
-          @tap.stop="previewImage(item.media, idx)"
+          @tap="previewImage(item.mediaImages || item.media, idx)"
         />
       </view>
-
-      <!-- 2. 视频帖子：视频与附图并列展示 -->
-      <template v-else-if="item.type === 'video'">
-        <view class="video-wrapper" v-if="item.media && item.media.length">
-          <video
-            class="video-player"
-            :src="item.media[0]"
-            :poster="item.poster || item.media[1] || ''"
-            controls
-            :enable-progress-gesture="true"
-            show-progress="true"
-            object-fit="cover"
-          />
-        </view>
-        <view class="media-grid" v-if="item.extraImages && item.extraImages.length">
-          <image
-            v-for="(img, idx) in item.extraImages"
-            :key="idx"
-            class="media-img"
-            :src="img"
-            mode="aspectFill"
-            @tap.stop="previewImage(item.extraImages, idx)"
-          />
-        </view>
-      </template>
+      <view class="media-video" v-if="item.type === 'video' && (item.videoSrc || item.media)">
+        <video
+          class="video-player"
+          :src="item.videoSrc || (Array.isArray(item.media) ? item.media[0] : item.media)"
+          :poster="item.poster || defaultVideoPoster"
+          controls
+          autoplay="false"
+          show-center-play-btn
+          object-fit="cover"
+          playsinline
+          webkit-playsinline
+          x5-video-player-type="h5"
+        />
+      </view>
+      <view class="media-grid" v-if="item.type === 'video' && item.mediaImages && item.mediaImages.length">
+        <image
+          v-for="(img, idx) in item.mediaImages"
+          :key="idx"
+          class="media-img"
+          :src="img"
+          mode="aspectFill"
+          @tap="previewImage(item.mediaImages, idx)"
+        />
+      </view>
 
       <!-- 3. 兜底显示 -->
       <view class="media-grid" v-else-if="item.type !== 'image' && item.type !== 'video' && item.media && item.media.length">
@@ -160,21 +165,73 @@
         </view>
       </view>
     </view>
+
+    <!-- 好友弹窗 -->
+    <view class="friend-modal" v-if="showFriendModal" @tap="closeFriendModal">
+      <view class="friend-content" @tap.stop>
+        <view class="friend-header">
+          <text class="friend-title">好友中心</text>
+          <text class="close-btn" @tap="closeFriendModal">✕</text>
+        </view>
+
+        <view class="friend-send">
+          <input class="friend-input" type="text" v-model="friendRequestInput" placeholder="输入用户ID发送好友申请" />
+          <button class="friend-btn primary" :disabled="!friendRequestInput.trim() || friendLoading" @tap="handleSendFriendRequest">发送</button>
+        </view>
+
+        <scroll-view class="friend-lists" scroll-y>
+          <view class="friend-section">
+            <view class="friend-section-title">我的好友 ({{ friends.length }})</view>
+            <view v-if="friends.length === 0" class="empty-tip">暂无好友</view>
+            <view class="friend-item" v-for="f in friends" :key="f.friendship_id">
+              <text class="friend-name">{{ f.username }}</text>
+              <text class="friend-id">ID: {{ f.id }}</text>
+            </view>
+          </view>
+
+          <view class="friend-section">
+            <view class="friend-section-title">待处理申请 ({{ friendRequests.length }})</view>
+            <view v-if="friendRequests.length === 0" class="empty-tip">暂无待处理申请</view>
+            <view class="friend-item" v-for="req in friendRequests" :key="req.id">
+              <view class="friend-info">
+                <text class="friend-name">来自用户 {{ req.from_user }}</text>
+                <text class="friend-id">申请ID: {{ req.id }}</text>
+              </view>
+              <view class="friend-actions">
+                <button size="mini" class="friend-btn primary" :disabled="friendLoading" @tap="handleRespond(req, 'accept')">同意</button>
+                <button size="mini" class="friend-btn" :disabled="friendLoading" @tap="handleRespond(req, 'reject')">拒绝</button>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+      </view>
+    </view>
   </scroll-view>
   </view>
 </template>
 
 <script>
-import { fetchMe, fetchMyPosts, deletePostApi } from '@/services/api'
+import {
+  fetchMe,
+  fetchMyPosts,
+  deletePostApi,
+  getCommentsApi,
+  createCommentApi
+} from '@/services/api'
+import { normalizePosts as sharedNormalizePosts } from '@/utils/postNormalize'
+
 export default {
   data() {
     return {
       statusBarHeight: 0,
+      defaultAvatar: 'https://picsum.photos/200',
+      myAvatar: 'https://picsum.photos/200',
       profile: {
         avatar: 'https://picsum.photos/200',
         nickname: '小程序用户',
         signature: '记录生活 · 分享精彩'
       },
+
       myPosts: [],
       myStats: {
         posts: 0
@@ -186,13 +243,23 @@ export default {
       currentPostComments: [],
       newCommentText: '',
       submittingComment: false,
-      commentsData: {}
+      commentsData: {},
+      // 好友弹窗相关
+      showFriendModal: false,
+      friendRequestInput: '',
+      friendLoading: false,
+      friends: [],
+      friendRequests: []
     }
   },
+
   onLoad() {
     this.setStatusBar()
     this.loadProfileFromStorage()
+    const cached = uni.getStorageSync('current_user')
+    if (cached?.profile?.avatar) this.myAvatar = cached.profile.avatar
     // 监听发布事件，把自己的帖子加入列表
+
     this.__newMyPostHandler = (payload = {}) => {
       if (payload.myPost) {
         const dedupMedia = Array.from(new Set(payload.myPost.media || []))
@@ -202,7 +269,8 @@ export default {
           media: dedupMedia,
           likes: payload.myPost.likes || 0,
           comments: payload.myPost.comments || 0,
-          liked: false
+          liked: false,
+          visibility: payload.myPost.visibility || 'public'
         })
         // 更新统计
         this.myStats.posts = (this.myStats.posts || 0) + 1
@@ -220,7 +288,10 @@ export default {
       this.myPosts = this.myPosts.map(p => ({
         ...p,
         avatar: avatar || p.avatar || this.profile.avatar,
-        name: nickname || p.name || this.profile.nickname
+        name: nickname || p.name || this.profile.nickname,
+        likes: p.likes || 0,
+        comments: p.comments || 0,
+        liked: p.liked || false
       }))
     }
     uni.$on('profileUpdated', this.__profileUpdatedHandler)
@@ -242,10 +313,15 @@ export default {
     }
   },
   methods: {
+    visLabel(vis) {
+      const map = { public: '公开', friends: '好友', private: '仅自己' }
+      return map[vis] || '公开'
+    },
     formatTime(ts) {
       if (!ts) return ''
       const date = new Date(ts)
       const diff = Date.now() - date.getTime()
+
       const sec = Math.floor(diff / 1000)
       if (sec < 60) return '刚刚'
       const min = Math.floor(sec / 60)
@@ -275,6 +351,7 @@ export default {
         this.profile.nickname = nickname
         this.profile.signature = signature
         this.profile.avatar = avatar
+        if (this.profile.avatar) this.myAvatar = this.profile.avatar
         // 同步已有列表显示
         this.myPosts = this.myPosts.map(p => ({
           ...p,
@@ -292,13 +369,16 @@ export default {
         const data = await fetchMe()
         // 更新本地缓存和界面
         uni.setStorageSync('current_user', data)
+
         this.profile.nickname = data.username || data.nickname || '小程序用户'
         this.profile.signature = data.profile.signature || data.signature || '记录生活 · 分享精彩'
         this.profile.avatar = data.profile.avatar || data.avatar || this.profile.avatar
+        if (this.profile.avatar) this.myAvatar = this.profile.avatar
         // 同步已有列表的头像/昵称
         this.myPosts = this.myPosts.map(p => ({
           ...p,
           avatar: this.profile.avatar,
+
           name: this.profile.nickname,
           likes: p.likes || 0,
           comments: p.comments || 0,
@@ -311,87 +391,28 @@ export default {
     async loadMyPosts() {
       try {
         const list = await fetchMyPosts()
-        this.myPosts = (list || []).map(item => {
-          const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
-
-          const normalizeUrl = (url) => {
-            if (!url) return ''
-            const fixedSlashes = url.replace(/\\/g, '/')
-            if (/^https?:\/\//i.test(fixedSlashes)) return fixedSlashes
-            if (fixedSlashes.startsWith('/media/')) return `${API_BASE}${fixedSlashes}`
-            return fixedSlashes
-          }
-
-          const mediaList = (item.media || [])
-            .filter(Boolean)
-            .map(normalizeUrl)
-          // 去重，避免重复图片
-          const dedupedMediaList = Array.from(new Set(mediaList))
-
-          let type = item.type || (dedupedMediaList.length > 0 ? 'image' : 'text')
-          if (type === 'text' && dedupedMediaList.length > 0) type = 'image'
-          const created = item.created_at || item.created_time || ''
-
-          let poster = item.poster ? normalizeUrl(item.poster) : ''
-          let mediaForRender = dedupedMediaList
-          let extraImages = []
-
-          if (type === 'video') {
-            const imageRegex = /\.(png|jpe?g|webp|gif)$/i
-            let videoUrl = ''
-            const images = []
-            dedupedMediaList.forEach(url => {
-              if (!url) return
-              const isImage = imageRegex.test(url)
-              const looksLikeVideo = url.includes('/uploads/videos/') || /\.mp4$/i.test(url)
-              if (!videoUrl && (looksLikeVideo || !isImage)) {
-                videoUrl = url
-              } else if (isImage) {
-                images.push(url)
-              }
-            })
-            if (!videoUrl && images.length) {
-              // 实际没有视频，用图片渲染
-              type = 'image'
-              mediaForRender = images
-              extraImages = []
-              poster = ''
-            } else {
-              // 仅使用后端返回的 poster，避免把附图当成封面
-              if (!poster || poster.includes('/uploads/videos/')) {
-                poster = ''
-              }
-              mediaForRender = videoUrl ? [videoUrl] : []
-              // 附图去重展示
-              extraImages = Array.from(new Set(images))
-            }
-          } else {
-            // 纯图片帖子，直接使用去重后的列表
-            extraImages = []
-            mediaForRender = dedupedMediaList
-          }
-
-          return {
-            id: item.id,
-            time: item.time || this.formatTime(created),
-            text: item.text || '',
-            type,
-            media: mediaForRender,
-            poster,
-            extraImages,
-            likes: item.likes_count || item.likes || 0,
-            comments: item.comments_count || item.comments || 0,
-            liked: item.is_liked || false,
-            avatar: item.user?.profile?.avatar || this.profile.avatar,
-            name: item.user?.username || this.profile.nickname,
-            tags: item.tags || []
-          }
-        })
+        this.myPosts = this.normalizePosts(list || [], this.profile.avatar).map(item => ({
+          ...item,
+          time: item.time || this.formatTime(item.created_at || item.created_time || ''),
+          name: item.user?.username || this.profile.nickname,
+          tags: item.tags || [],
+          visibility: item.visibility || 'public'
+        }))
         this.myStats.posts = this.myPosts.length
+        this.prefetchCommentCounts()
       } catch (e) {
         // 静默失败
       }
     },
+    normalizePosts(list = [], fallbackAvatar = '') {
+      return sharedNormalizePosts(list, fallbackAvatar).map(p => ({
+        ...p,
+        likes: p.likes_count ?? p.likes ?? 0,
+        comments: p.comments_count ?? p.comment_count ?? p.comments ?? (p.comments_list ? p.comments_list.length : 0),
+        liked: p.is_liked ?? p.liked ?? false
+      }))
+    },
+
     handlePublish() {
       // 跳转到发动态页面
       uni.navigateTo({
@@ -467,15 +488,38 @@ export default {
     },
     handleComment(item) {
       this.currentPostId = item.id
-      this.currentPostComments = this.commentsData[item.id] || []
       this.showCommentModal = true
       this.newCommentText = ''
+      this.fetchComments(item.id)
     },
     closeCommentModal() {
       this.showCommentModal = false
       this.currentPostId = null
       this.currentPostComments = []
       this.newCommentText = ''
+    },
+    async fetchComments(postId) {
+      try {
+        const response = await getCommentsApi({ postId, page: 1, pageSize: 500 })
+        const resData = response?.data || response
+        const payload = resData.results || resData.data || resData
+        const innerData = payload.data || payload
+        const commentsArr = innerData.comments || innerData.results || []
+        if (Array.isArray(commentsArr)) {
+          this.currentPostComments = commentsArr.map(comment => ({
+            id: comment.id,
+            name: comment.name,
+            avatar: comment.avatar || this.defaultAvatar,
+            content: comment.content,
+            time: comment.time
+          }))
+          const post = this.myPosts.find(p => p.id === postId)
+          const totalCount = innerData.total ?? resData.count ?? commentsArr.length
+          if (post && Number.isFinite(totalCount)) post.comments = totalCount
+        }
+      } catch (e) {
+        this.currentPostComments = []
+      }
     },
     async submitComment() {
       const content = this.newCommentText.trim()
@@ -485,38 +529,59 @@ export default {
       }
 
       this.submittingComment = true
-
-      setTimeout(() => {
-        const newComment = {
-          id: Date.now(),
-          name: '我',
-          avatar: 'https://picsum.photos/200',
-          content: content,
-          time: '刚刚'
+      try {
+        const response = await createCommentApi({ postId: this.currentPostId, content })
+        if (response.success) {
+          const commentData = response.data?.comment || response.data || {}
+          const newComment = {
+            id: commentData.id || Date.now(),
+            name: commentData.name || '我',
+            avatar: commentData.avatar || this.myAvatar || this.defaultAvatar,
+            content: commentData.content || content,
+            time: commentData.time || '刚刚'
+          }
+          this.currentPostComments.unshift(newComment)
+          const post = this.myPosts.find(p => p.id === this.currentPostId)
+          if (post) {
+            post.comments = (post.comments || 0) + 1
+          }
+          this.newCommentText = ''
+          uni.showToast({ title: '评论成功', icon: 'success' })
         }
-
-        if (!this.commentsData[this.currentPostId]) {
-          this.commentsData[this.currentPostId] = []
-        }
-        this.commentsData[this.currentPostId].unshift(newComment)
-        this.currentPostComments = this.commentsData[this.currentPostId]
-
-        const myPost = this.myPosts.find(p => p.id === this.currentPostId)
-        if (myPost) {
-          myPost.comments = (myPost.comments || 0) + 1
-        }
-
-        this.newCommentText = ''
+      } catch (error) {
+        uni.showToast({ title: '评论失败', icon: 'none' })
+      } finally {
         this.submittingComment = false
-        uni.showToast({ title: '评论成功', icon: 'success' })
-      }, 500)
+      }
     },
+    async prefetchCommentCounts() {
+      if (!Array.isArray(this.myPosts) || this.myPosts.length === 0) return
+      for (const post of this.myPosts) {
+        try {
+          const res = await getCommentsApi({ postId: post.id, page: 1, pageSize: 1 })
+          const resData = res?.data || res
+          const payload = resData.results || resData.data || resData
+          const innerData = payload.data || payload
+          const totalCount = innerData.total ?? resData.count ?? 0
+          if (Number.isFinite(totalCount)) {
+            post.comments = totalCount
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    },
+
     previewImage(urls, current = 0) {
       if (!urls || !urls.length) return
       uni.previewImage({
         urls,
         current
       })
+    },
+    // 好友入口
+    goFriendList() {
+      uni.navigateTo({ url: '/pages/friend/friend' })
     }
   }
 }
@@ -619,6 +684,7 @@ export default {
 .profile-actions {
   display: flex;
   gap: 12rpx;
+  flex-wrap: wrap;
 }
 
 .profile-btn {
@@ -664,6 +730,12 @@ export default {
   color: #999;
 }
 
+.tag-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
 /* 删除按钮样式 */
 .delete-btn {
   padding: 8rpx 20rpx;
@@ -689,6 +761,33 @@ export default {
   font-size: 30rpx;
   line-height: 1.6;
   margin-bottom: 16rpx;
+}
+
+.visibility {
+  padding: 8rpx 14rpx;
+  border-radius: 12rpx;
+  background: #f6f7fb;
+  color: #666;
+  font-size: 22rpx;
+  border: 1rpx solid #eef0f5;
+}
+
+.visibility.vis-public {
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+  border-color: rgba(102, 126, 234, 0.2);
+}
+
+.visibility.vis-friends {
+  background: rgba(24, 160, 88, 0.12);
+  color: #18a058;
+  border-color: rgba(24, 160, 88, 0.2);
+}
+
+.visibility.vis-private {
+  background: rgba(153, 153, 153, 0.12);
+  color: #666;
+  border-color: rgba(153, 153, 153, 0.2);
 }
 
 .tags-row {

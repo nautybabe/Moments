@@ -11,6 +11,7 @@
         <view class="badge" v-if="notifyCount > 0">{{ notifyCount }}</view>
       </view>
     </view>
+    
 
     <view class="section-title">好友动态</view>
     <view class="post-card" v-for="item in posts" :key="item.id">
@@ -20,14 +21,19 @@
           <text class="name">{{ item.name }}</text>
           <text class="time">{{ item.time }}</text>
         </view>
-        <text class="tag" v-if="item.tag">{{ item.tag }}</text>
+        <view class="tag-wrap">
+          <text class="tag" v-if="item.tag">{{ item.tag }}</text>
+          <text class="visibility" :class="`vis-${item.visibility || 'public'}`">
+            {{ visLabel(item.visibility) }}
+          </text>
+        </view>
       </view>
 
       <view class="text" v-if="item.text">{{ item.text }}</view>
 
       <view class="media-grid" v-if="item.type === 'image'">
         <image
-          v-for="(img, idx) in item.media"
+          v-for="(img, idx) in item.mediaImages"
           :key="idx"
           class="media-img"
           :src="img"
@@ -37,13 +43,29 @@
 
       <view class="media-video" v-if="item.type === 'video'">
         <video
-          :src="item.media"
+          :src="item.videoSrc"
           :poster="item.poster"
           controls
           autoplay="false"
           show-center-play-btn
           object-fit="cover"
         />
+      </view>
+      <!-- 视频下方的图片（如有） -->
+      <view class="media-grid" v-if="item.type === 'video' && item.mediaImages && item.mediaImages.length">
+        <image
+          v-for="(img, idx) in item.mediaImages"
+          :key="idx"
+          class="media-img"
+          :src="img"
+          mode="aspectFill"
+        />
+      </view>
+
+      <view class="tag-rating-row" v-if="item.tags && item.tags.length">
+        <view class="tags">
+          <text class="tag-chip" v-for="tag in item.tags" :key="tag">#{{ tag }}</text>
+        </view>
       </view>
 
       <view class="actions-row">
@@ -154,14 +176,17 @@
 </template>
 
 <script>
-import { getPostsApi, likePostApi, getCommentsApi, createCommentApi, getNotificationsApi, markAsReadApi } from '../../services/api'
+import { getPostsApi, likePostApi, getCommentsApi, createCommentApi, getNotificationsApi, markNotificationReadApi, markAllNotificationsReadApi, fetchMe } from '../../services/api'
 
 export default {
   data() {
     return {
+      defaultAvatar: 'https://picsum.photos/200',
+      myAvatar: 'https://picsum.photos/200',
       statusBarHeight: 0, // 状态栏高度
       capsuleHeight: 0,   // 胶囊高度
       topPadding: 0,       // 页面顶部预留边距
+
       posts: [],           // 动态列表，从API获取
       notifyCount: 0,      // 通知数量，从API获取
       showCommentModal: false,
@@ -172,19 +197,28 @@ export default {
       showNotifyModal: false,
       notifications: [],   // 通知列表，从API获取
       loading: false,      // 加载状态
-      error: null          // 错误信息
+      error: null,         // 错误信息
+      scrollHeight: 700    // 滚动区域高度
     }
   },
   computed: {
-    // 修复：补全 computed 方法的闭合
+    // 未读数量
     unreadCount() {
       return this.notifications.filter(n => !n.read).length
     }
   },
   onLoad() {
+    const cached = uni.getStorageSync('current_user')
+    if (cached?.profile?.avatar) this.myAvatar = cached.profile.avatar
+    this.pullMe()
     this.fetchPosts()
-    this.fetchNotifications()
+    if (typeof this.fetchNotifications === 'function') {
+      this.fetchNotifications()
+    } else {
+      console.warn('fetchNotifications not ready onLoad')
+    }
     this.calculateScrollHeight()
+
     this.setStatusBar()
     this.calculateSafeArea()
   },
@@ -197,7 +231,11 @@ export default {
     this.setStatusBar()
     // 每次显示页面时刷新数据
     this.fetchPosts()
-    this.fetchNotifications()
+    if (typeof this.fetchNotifications === 'function') {
+      this.fetchNotifications()
+    } else {
+      console.warn('fetchNotifications not ready onShow')
+    }
   },
   methods: {
     goToSearch() {
@@ -205,28 +243,84 @@ export default {
         url: '/pages/search/search'
       })
     },
+        setStatusBar() {
+      try {
+        const info = uni.getSystemInfoSync()
+        this.statusBarHeight = info.statusBarHeight || 0
+      } catch (e) {
+        console.error('获取系统信息失败', e)
+      }
+    },
+
+    updateUnreadCount() {
+      this.notifyCount = this.notifications.filter(n => !n.read).length
+    },
+    async pullMe() {
+      try {
+        const me = await fetchMe()
+        if (me?.profile?.avatar) this.myAvatar = me.profile.avatar
+      } catch (e) {
+        // ignore
+      }
+    },
+    // 预取每个动态的评论数
+    async prefetchCommentCounts() {
+      if (!Array.isArray(this.posts) || this.posts.length === 0) return
+      for (const post of this.posts) {
+        try {
+          const res = await getCommentsApi({ postId: post.id, page: 1, pageSize: 1 })
+          const resData = res?.data || res
+          const payload = resData.results || resData.data || resData
+          const innerData = payload.data || payload
+          const totalCount = innerData.total ?? resData.count ?? 0
+          if (Number.isFinite(totalCount)) {
+            post.comments = totalCount
+          }
+        } catch (e) {
+          // 忽略单条错误，继续其他动态
+        }
+      }
+    },
     // 获取动态列表
     async fetchPosts() {
       this.loading = true
       try {
-        const response = await getPostsApi()
+        const response = await getPostsApi({ page: 1, pageSize: 20 })
+
         console.log('动态列表响应:', response)
-        if (response.success) {
-          this.posts = response.data.posts.map(post => ({
+        const rawPosts = response?.data?.results || response?.data?.posts || response?.results || []
+        this.posts = (rawPosts || []).map(post => {
+          const mediaArray = Array.isArray(post.media) ? post.media.filter(Boolean) : (post.media ? [post.media] : [])
+          const imageRegex = /\.(png|jpe?g|webp|gif)$/i
+          let type = post.type || 'image'
+          let videoSrc = ''
+          let images = mediaArray
+
+          if (type === 'video') {
+            videoSrc = mediaArray.find(m => m && (!imageRegex.test(m) || m.includes('/uploads/videos/'))) || mediaArray[0] || ''
+            images = mediaArray.filter(m => m && m !== videoSrc && imageRegex.test(m))
+          }
+
+          return {
             id: post.id,
-            name: post.name,
-            avatar: post.avatar || 'https://picsum.photos/200',
-            time: post.time,
+            name: post.user?.username || post.name,
+            avatar: post.user?.profile?.avatar || post.avatar || 'https://picsum.photos/200',
+            time: post.time || post.created_at,
             text: post.text,
-            type: post.type || 'image',
-            media: post.media || [],
+            type,
+            mediaImages: images,
+            videoSrc: type === 'video' ? videoSrc : '',
             poster: '',
             tag: post.tag || '',
-            likes: post.likes,
-            comments: post.comments,
-            liked: post.liked || false
-          }))
-        }
+            tags: post.tags || [],
+            likes: post.likes_count ?? post.likes ?? 0,
+            comments: post.comments_count ?? post.comment_count ?? post.comments ?? (post.comments_list ? post.comments_list.length : 0),
+            liked: post.is_liked ?? post.liked ?? false,
+            visibility: post.visibility || 'public'
+          }
+        })
+        // 刷新评论数（使用评论接口的 count）
+        this.prefetchCommentCounts()
       } catch (error) {
         console.error('获取动态失败:', error)
         uni.showToast({ title: '获取动态失败', icon: 'none' })
@@ -234,61 +328,50 @@ export default {
         this.loading = false
       }
     },
-    // 获取通知列表
-    async fetchNotifications() {
+    async toggleLike(post) {
+      if (!post) return
+      const prevLiked = post.liked
+      const prevLikes = post.likes || 0
+      post.liked = !prevLiked
+
+      post.likes = prevLiked ? Math.max(0, prevLikes - 1) : prevLikes + 1
       try {
-        const response = await getNotificationsApi()
-        console.log('通知列表响应:', response)
-        if (response.success) {
-          this.notifications = response.data.notifications.map(notify => ({
-            id: notify.id,
-            type: notify.type,
-            name: notify.name,
-            avatar: notify.avatar || 'https://picsum.photos/200',
-            time: notify.time,
-            read: notify.read,
-            postId: notify.post_id || notify.post?.id,
-            postText: notify.post_text || notify.post?.content,
-            commentContent: notify.comment_content || notify.comment?.content
-          }))
-          this.notifyCount = response.data.total_unread
-        }
-      } catch (error) {
-        console.error('获取通知失败:', error)
-        // 不显示错误提示，避免影响用户体验
+        await likePostApi({ postId: post.id, liked: post.liked })
+      } catch (e) {
+        post.liked = prevLiked
+        post.likes = prevLikes
+        uni.showToast({ title: '点赞失败', icon: 'none' })
       }
     },
-    // 点赞/取消点赞
-    async toggleLike(item) {
-      try {
-        const newLikedState = !item.liked
-        const response = await likePostApi({ postId: item.id, liked: newLikedState })
-        if (response.success) {
-          item.liked = newLikedState
-          item.likes = response.data.likes
-        }
-      } catch (error) {
-        console.error('点赞操作失败:', error)
-        uni.showToast({ title: '操作失败', icon: 'none' })
-      }
-    },
-    // 查看评论
     async handleComment(item) {
       this.currentPostId = item.id
       this.showCommentModal = true
-      this.newCommentText = ''
-      
+      this.fetchComments(item.id)
+    },
+    async fetchComments(postId) {
       try {
-        const response = await getCommentsApi({ postId: item.id })
+        const response = await getCommentsApi({ postId, page: 1, pageSize: 500 })
         console.log('获取评论响应:', response)
-        if (response.success) {
-          this.currentPostComments = response.data.comments.map(comment => ({
+        // 兼容分页响应（count/next/previous/results）、包裹 success/data 的结构
+        const resData = response?.data || response
+        const payload = resData.results || resData.data || resData
+        const innerData = payload.data || payload
+        const commentsArr = innerData.comments || innerData.results || []
+        if (Array.isArray(commentsArr)) {
+          // ...
+          this.currentPostComments = commentsArr.map(comment => ({
             id: comment.id,
-            name: comment.name,
-            avatar: comment.avatar,
+            name: comment.user?.username || comment.name,
+            avatar: comment.user?.profile?.avatar || comment.avatar || this.defaultAvatar,
             content: comment.content,
             time: comment.time
           }))
+          // 同步评论数
+          const post = this.posts.find(p => p.id === postId)
+          const totalCount = innerData.total ?? resData.count ?? commentsArr.length
+          if (post && Number.isFinite(totalCount)) {
+            post.comments = totalCount
+          }
         }
       } catch (error) {
         console.error('获取评论失败:', error)
@@ -315,20 +398,21 @@ export default {
       try {
         const response = await createCommentApi({ postId: this.currentPostId, content })
         if (response.success) {
+          const commentData = response.data?.comment || response.data || {}
           // 更新评论列表
           const newComment = {
-            id: response.data.comment.id,
-            name: '我',
-            avatar: 'https://picsum.photos/200',
-            content: content,
-            time: '刚刚'
+            id: commentData.id || Date.now(),
+            name: commentData.name || '我',
+            avatar: commentData.avatar || this.myAvatar || this.defaultAvatar,
+            content: commentData.content || content,
+            time: commentData.time || '刚刚'
           }
           this.currentPostComments.unshift(newComment)
           
           // 更新动态的评论数
           const post = this.posts.find(p => p.id === this.currentPostId)
           if (post) {
-            post.comments++
+            post.comments = (post.comments || 0) + 1
           }
           
           this.newCommentText = ''
@@ -342,7 +426,12 @@ export default {
       }
     },
     // 查看通知
-    handleNotify() {
+    async handleNotify() {
+      try {
+        await this.fetchNotifications()
+      } catch (e) {
+        // 已在 fetchNotifications 内部记录错误
+      }
       this.showNotifyModal = true
     },
     closeNotifyModal() {
@@ -357,6 +446,70 @@ export default {
       }
       return icons[type] || '🔔'
     },
+
+    visLabel(vis) {
+      const map = {
+        public: '公开',
+        friends: '好友',
+        private: '仅自己'
+      }
+      return map[vis] || '公开'
+    },
+    // 拉取通知列表
+    async fetchNotifications() {
+      try {
+        const res = await getNotificationsApi()
+        const data = res?.data || res || {}
+        // 兼容多种返回结构：{notifications: []}、{results: []}、{data: []}
+        const list = data.notifications || data.results || data.data || []
+        const normalized = Array.isArray(list)
+          ? list.map(n => ({
+              id: n.id,
+              type: n.type,
+              name: n.name || n.user?.username || '系统',
+              avatar: n.avatar || n.user?.profile?.avatar || this.defaultAvatar,
+              time: n.time || n.created_at,
+              read: n.read ?? n.is_read ?? false,
+              postId: n.postId || n.post_id,
+              postText: n.postText || n.post_text
+            }))
+          : []
+        this.notifications = normalized
+        this.updateUnreadCount()
+      } catch (error) {
+        console.error('获取通知失败:', error)
+        this.notifications = []
+        this.notifyCount = 0
+        uni.showToast({ title: '获取通知失败', icon: 'none' })
+      }
+    },
+    async markAllAsRead() {
+      try {
+        await markAllNotificationsReadApi()
+        await this.fetchNotifications()
+        uni.showToast({ title: '已全部标记为已读', icon: 'success' })
+      } catch (error) {
+        console.error('标记全部已读失败:', error)
+        uni.showToast({ title: '操作失败', icon: 'none' })
+      }
+    },
+    async handleNotifyClick(notification) {
+      if (!notification?.id) return
+      try {
+        await markNotificationReadApi(notification.id)
+        // 更新本地状态，减少等待
+        const target = this.notifications.find(n => n.id === notification.id)
+        if (target) target.read = true
+        this.updateUnreadCount()
+        // 可选：关闭弹窗或跳转到帖子
+        // if (notification.postId) {
+        //   uni.navigateTo({ url: `/pages/post/detail?id=${notification.postId}` })
+        // }
+      } catch (error) {
+        console.error('标记已读失败:', error)
+        uni.showToast({ title: '操作失败', icon: 'none' })
+      }
+    },
     getNotifyText(notification) {
       const texts = {
         like: '赞了你的动态',
@@ -370,103 +523,36 @@ export default {
       }
       return text
     },
-    // 点击通知
-    async handleNotifyClick(notification) {
-      if (!notification.read) {
-        // 标记为已读
-        try {
-          await markAsReadApi({ notificationIds: [notification.id] })
-          notification.read = true
-          this.fetchNotifications() // 刷新通知列表
-        } catch (error) {
-          console.error('标记已读失败:', error)
-        }
-      }
-      
-      this.closeNotifyModal()
-      
-      if (notification.postId) {
-        setTimeout(() => {
-          if (notification.type === 'comment') {
-            const post = this.posts.find(p => p.id === notification.postId)
-            if (post) {
-              this.handleComment(post)
-            }
-          } else {
-            uni.showToast({ 
-              title: `查看动态 #${notification.postId}`, 
-              icon: 'none',
-              duration: 1500
-            })
-          }
-        }, 300)
-      }
-    },
-    // 标记所有通知为已读
-    async markAllAsRead() {
-      try {
-        await markAsReadApi({ notificationIds: [] })
-        this.fetchNotifications() // 刷新通知列表
-        uni.showToast({ title: '已全部标记为已读', icon: 'success' })
-      } catch (error) {
-        console.error('标记全部已读失败:', error)
-        uni.showToast({ title: '操作失败', icon: 'none' })
-      }
-    },
-    updateUnreadCount() {
-      this.notifyCount = this.notifications.filter(n => !n.read).length
-    },
-    // 修复：补全 try-catch 闭合，修正逻辑
-    setStatusBar() {
-      try {
-        const info = uni.getSystemInfoSync()
-        this.statusBarHeight = info.statusBarHeight || 0
-      } catch (e) {
-        console.error('获取系统信息失败', e)
-      }
-    },
+
+    // 状态栏与安全区
     calculateSafeArea() {
       try {
-        const systemInfo = uni.getSystemInfoSync();
-        // 兼容微信小程序和 App 端获取胶囊信息
-        const menuButtonInfo = uni.getMenuButtonBoundingClientRect ? uni.getMenuButtonBoundingClientRect() : {};
-
-        // 状态栏高度
-        const statusBarHeight = systemInfo.statusBarHeight || 0;
-
-        // 胶囊高度和顶部间距（默认值兼容）
-        const capsuleHeight = menuButtonInfo.height || 32;
-        const capsuleTop = menuButtonInfo.top || statusBarHeight;
-
-        // 计算顶部预留边距（胶囊底部到顶部的距离 + 额外 8px 间距）
-        const topPadding = capsuleTop + capsuleHeight + 8;
-
-        // 设置数据
-        this.statusBarHeight = statusBarHeight;
-        this.capsuleHeight = capsuleHeight;
-        this.topPadding = topPadding;
+        const systemInfo = uni.getSystemInfoSync()
+        const menuButtonInfo = uni.getMenuButtonBoundingClientRect ? uni.getMenuButtonBoundingClientRect() : {}
+        const statusBarHeight = systemInfo.statusBarHeight || 0
+        const capsuleHeight = menuButtonInfo.height || 32
+        const capsuleTop = menuButtonInfo.top || statusBarHeight
+        const topPadding = capsuleTop + capsuleHeight + 8
+        this.statusBarHeight = statusBarHeight
+        this.capsuleHeight = capsuleHeight
+        this.topPadding = topPadding
       } catch (e) {
-        console.error('获取胶囊信息失败', e);
-        // 异常时设置默认值
-        this.topPadding = 44;
+        console.error('获取胶囊信息失败', e)
+        this.topPadding = 44
       }
     },
-    // 修复：合并重复的 calculateScrollHeight 方法
     calculateScrollHeight() {
       try {
         const systemInfo = uni.getSystemInfoSync()
-        // 计算可用高度：屏幕高度 - 顶部预留边距 - 底部预留间距（40rpx = 20px）
-        this.scrollHeight = systemInfo.windowHeight - this.topPadding - 20;
-        
+        this.scrollHeight = systemInfo.windowHeight - this.topPadding - 20
         this.$nextTick(() => {
-          // 确保高度计算正确（避免初始值为 0）
           if (this.scrollHeight <= 0) {
-            this.scrollHeight = systemInfo.windowHeight - 44 - 20; // 默认顶部边距 44px
+            this.scrollHeight = systemInfo.windowHeight - 44 - 20
           }
         })
       } catch (e) {
-        console.error('计算滚动高度失败', e);
-        this.scrollHeight = 600; // 异常时设置默认高度
+        console.error('计算滚动高度失败', e)
+        this.scrollHeight = 600
       }
     }
   }
@@ -574,6 +660,12 @@ export default {
   margin-bottom: 20rpx;
 }
 
+.tag-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
 .avatar {
   width: 72rpx;
   height: 72rpx;
@@ -606,6 +698,33 @@ export default {
   background: rgba(102, 126, 234, 0.12);
   color: #667eea;
   font-size: 22rpx;
+}
+
+.visibility {
+  padding: 8rpx 14rpx;
+  border-radius: 12rpx;
+  background: #f6f7fb;
+  color: #666;
+  font-size: 22rpx;
+  border: 1rpx solid #eef0f5;
+}
+
+.visibility.vis-public {
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+  border-color: rgba(102, 126, 234, 0.2);
+}
+
+.visibility.vis-friends {
+  background: rgba(24, 160, 88, 0.12);
+  color: #18a058;
+  border-color: rgba(24, 160, 88, 0.2);
+}
+
+.visibility.vis-private {
+  background: rgba(153, 153, 153, 0.12);
+  color: #666;
+  border-color: rgba(153, 153, 153, 0.2);
 }
 
 .text {

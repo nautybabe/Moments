@@ -124,7 +124,9 @@
     <scroll-view class="results-container" scroll-y v-if="hasSearched">
       <view class="results-header">
         <view class="results-info">
-          <text class="results-count">找到 <text class="count-number">{{ searchResults.length }}</text> 条结果</text>
+          <text class="results-count">
+            用户 <text class="count-number">{{ userResults.length }}</text> · 动态 <text class="count-number">{{ searchResults.length }}</text>
+          </text>
           <text class="results-tip" v-if="searchForm.keyword">关键词: "{{ searchForm.keyword }}"</text>
         </view>
         <text class="clear-results-btn" @tap="clearResults">
@@ -133,7 +135,20 @@
         </text>
       </view>
 
-      <!-- 空结果 -->
+      <!-- 用户结果 -->
+      <view class="user-results">
+        <view class="user-card" v-for="u in userResults" :key="u.id">
+          <image class="avatar" :src="u.profile?.avatar || defaultAvatar" mode="aspectFill" />
+          <view class="user-meta">
+            <text class="name">{{ u.username }}</text>
+            <text class="sub">ID: {{ u.id }}</text>
+          </view>
+          <button size="mini" class="add-btn" :disabled="adding" @tap="handleAddFriend(u)">加好友</button>
+        </view>
+        <view v-if="userResults.length === 0" class="empty-sub">未找到相关用户</view>
+      </view>
+
+      <!-- 动态结果 -->
       <view v-if="searchResults.length === 0" class="empty-state">
         <view class="empty-icon-wrapper">
           <text class="empty-icon">🔍</text>
@@ -143,8 +158,7 @@
         <button class="empty-action-btn" @tap="resetFilters">重新搜索</button>
       </view>
 
-      <!-- 结果列表 -->
-      <view class="results-list">
+      <view class="results-list" v-else>
         <view 
           class="post-card" 
           v-for="(item, index) in searchResults" 
@@ -164,25 +178,48 @@
             <rich-text :nodes="highlightKeyword(item.text)"></rich-text>
           </view>
 
-          <view class="media-grid" v-if="item.type === 'image' && item.media">
+          <view class="location-row" v-if="item.location">
+            <text class="location-icon">📍</text>
+            <text class="location-text">{{ item.location }}</text>
+          </view>
+
+          <view class="tags-row" v-if="item.tags && item.tags.length">
+            <view class="tag" v-for="tag in item.tags" :key="tag">#{{ tag }}</view>
+          </view>
+
+          <view class="media-grid" v-if="item.type === 'image' && (item.mediaImages || item.media)">
             <image
-              v-for="(img, idx) in item.media"
+              v-for="(img, idx) in (item.mediaImages || item.media)"
               :key="idx"
               class="media-img"
               :src="img"
               mode="aspectFill"
-              @tap="previewImage(item.media, idx)"
+              @tap="previewImage(item.mediaImages || item.media, idx)"
             />
           </view>
 
-          <view class="media-video" v-if="item.type === 'video'">
+          <view class="media-video" v-if="item.type === 'video' && (item.videoSrc || item.media)">
             <video
-              :src="item.media"
-              :poster="item.poster"
+              class="video-player"
+              :src="item.videoSrc || getMediaSrc(item.media)"
+              :poster="item.poster || defaultVideoPoster"
               controls
               autoplay="false"
               show-center-play-btn
               object-fit="cover"
+              playsinline
+              webkit-playsinline
+              x5-video-player-type="h5"
+            />
+          </view>
+          <view class="media-grid" v-if="item.type === 'video' && item.mediaImages && item.mediaImages.length">
+            <image
+              v-for="(img, idx) in item.mediaImages"
+              :key="idx"
+              class="media-img"
+              :src="img"
+              mode="aspectFill"
+              @tap="previewImage(item.mediaImages, idx)"
             />
           </view>
 
@@ -203,6 +240,9 @@
 </template>
 
 <script>
+import { searchApi, sendFriendRequestApi } from '@/services/api'
+import { normalizePosts as sharedNormalizePosts } from '@/utils/postNormalize'
+
 export default {
   data() {
     return {
@@ -215,47 +255,46 @@ export default {
         date: ''
       },
       hasSearched: false,
+      isSearching: false,
       showSuggestions: false,
       searchResults: [],
+      userResults: [],
+      adding: false,
+
       searchHistory: [],
       availableTags: ['户外', '日常', '美食', '旅行', '摄影', '运动', '学习', '工作'],
       hotTags: ['户外', '美食', '旅行', '摄影', '运动', '学习'],
-      allPosts: [],
-      suggestions: []
+      suggestions: [],
+      defaultAvatar: 'https://picsum.photos/200',
+      defaultVideoPoster: 'https://picsum.photos/600/400'
     };
   },
   onLoad() {
     this.calculateSafeArea();
     this.setStatusBar();
-    this.loadAllPosts();
     this.loadSearchHistory();
+
+  // ...
   },
   onShow() {
     this.setStatusBar();
   },
+  computed: {
+    hasActiveFilters() {
+      return !!(this.searchForm.tag || this.searchForm.date)
+    },
+    activeFilterCount() {
+      let c = 0
+      if (this.searchForm.tag) c += 1
+      if (this.searchForm.date) c += 1
+      return c
+    }
+  },
   methods: {
+    // ...
     calculateSafeArea() {
-      try {
-        const systemInfo = uni.getSystemInfoSync();
-        const menuButtonInfo = wx.getMenuButtonBoundingClientRect();
-
-        // 状态栏高度
-        const statusBarHeight = systemInfo.statusBarHeight || 0;
-
-        // 胶囊高度和顶部间距
-        const capsuleHeight = menuButtonInfo.height || 32;
-        const capsuleTop = menuButtonInfo.top || statusBarHeight;
-
-        // 计算顶部预留边距
-        const topPadding = capsuleTop + capsuleHeight + 8; // 额外预留 8px 间距
-
-        // 设置数据
-        this.statusBarHeight = statusBarHeight;
-        this.capsuleHeight = capsuleHeight;
-        this.topPadding = topPadding;
-      } catch (e) {
-        console.error('获取胶囊信息失败', e);
-      }
+      // 兼容旧调用，当前仅复用状态栏高度
+      this.topPadding = this.statusBarHeight || 0
     },
     setStatusBar() {
       try {
@@ -265,83 +304,18 @@ export default {
         this.statusBarHeight = 0;
       }
     },
-    loadAllPosts() {
-      // 示例数据
-      this.allPosts = [
-        {
-          id: 1,
-          name: '沐白',
-          avatar: 'https://picsum.photos/200?1',
-          time: '2分钟前',
-          text: '周末徒步，山顶风景太美啦！',
-          type: 'image',
-          media: [
-            'https://picsum.photos/400?2',
-            'https://picsum.photos/400?3',
-            'https://picsum.photos/400?4'
-          ],
-          tag: '户外',
-          likes: 32,
-          comments: 6,
-          liked: false
-        },
-        {
-          id: 2,
-          name: '阿宁',
-          avatar: 'https://picsum.photos/200?5',
-          time: '10分钟前',
-          text: '简单的日常记录，阳光很好 ☀️',
-          type: 'video',
-          media: 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4',
-          poster: 'https://picsum.photos/400?6',
-          tag: '日常',
-          likes: 18,
-          comments: 4,
-          liked: true
-        },
-        {
-          id: 3,
-          name: '小美',
-          avatar: 'https://picsum.photos/200?10',
-          time: '1小时前',
-          text: '今天做了好吃的红烧肉，太香了！',
-          type: 'image',
-          media: ['https://picsum.photos/400?20'],
-          tag: '美食',
-          likes: 25,
-          comments: 8,
-          liked: false
-        },
-        {
-          id: 4,
-          name: '旅行者',
-          avatar: 'https://picsum.photos/200?21',
-          time: '3小时前',
-          text: '云南大理，风景如画',
-          type: 'image',
-          media: [
-            'https://picsum.photos/400?22',
-            'https://picsum.photos/400?23'
-          ],
-          tag: '旅行',
-          likes: 45,
-          comments: 12,
-          liked: true
-        },
-        {
-          id: 5,
-          name: '摄影师',
-          avatar: 'https://picsum.photos/200?24',
-          time: '5小时前',
-          text: '今天拍了一组很满意的照片',
-          type: 'image',
-          media: ['https://picsum.photos/400?25'],
-          tag: '摄影',
-          likes: 38,
-          comments: 5,
-          liked: false
-        }
-      ]
+    goBack() {
+      const pages = getCurrentPages()
+      if (pages.length > 1) {
+        uni.navigateBack()
+      } else {
+        // 无上级页面时直接回好友列表（替换当前页，避免堆栈）
+        uni.redirectTo({ url: '/pages/friend/friend' })
+      }
+    },
+    resetFilters() {
+      this.searchForm.tag = ''
+      this.searchForm.date = ''
     },
     onKeywordInput(e) {
       const keyword = e.detail.value
@@ -350,6 +324,7 @@ export default {
         this.generateSuggestions(keyword)
       } else {
         this.showSuggestions = false
+        this.suggestions = []
       }
     },
     onInputFocus() {
@@ -357,192 +332,128 @@ export default {
         this.showSuggestions = true
       }
     },
-    generateSuggestions(keyword) {
-      // 生成搜索建议
-      const keywordLower = keyword.toLowerCase()
-      const userNames = [...new Set(this.allPosts.map(p => p.name))]
-      const suggestions = userNames
-        .filter(name => name.toLowerCase().includes(keywordLower))
-        .slice(0, 5)
-        .map(name => name)
-      this.suggestions = suggestions
-    },
-    selectSuggestion(suggestion) {
-      this.searchForm.keyword = suggestion
-      this.showSuggestions = false
-      this.performSearch()
-    },
     clearKeyword() {
       this.searchForm.keyword = ''
       this.showSuggestions = false
     },
+    generateSuggestions(keyword) {
+      // 简单本地提示：当前仅基于输入构造示例词（可替换为后端建议接口）
+      const base = keyword.trim()
+      if (!base) {
+        this.suggestions = []
+        return
+      }
+      this.suggestions = [
+        base,
+        `${base} 用户`,
+        `${base} 标签`,
+        `${base} 动态`
+      ].slice(0, 5)
+    },
+    formatHistoryText(item) {
+      if (!item) return ''
+      const { keyword = '', tag = '', date = '' } = item
+      const parts = []
+      if (keyword) parts.push(keyword)
+      if (tag) parts.push(`#${tag}`)
+      if (date) parts.push(date)
+      return parts.join(' · ')
+    },
     selectTag(tag) {
-      this.searchForm.tag = this.searchForm.tag === tag ? '' : tag
+      this.searchForm.tag = tag === this.searchForm.tag ? '' : tag
     },
     selectHotTag(tag) {
       this.searchForm.tag = tag
       this.performSearch()
     },
+    useHistoryItem(item) {
+      if (!item) return
+      this.searchForm.keyword = item.keyword || ''
+      this.searchForm.tag = item.tag || ''
+      this.searchForm.date = item.date || ''
+      this.performSearch()
+    },
     onDateChange(e) {
-      this.searchForm.date = e.detail.value
+      const val = e?.detail?.value || ''
+      this.searchForm.date = val
     },
     clearDate() {
       this.searchForm.date = ''
     },
-    resetFilters() {
-      this.searchForm = {
-        keyword: '',
-        tag: '',
-        date: ''
-      }
-      this.hasSearched = false
-      this.searchResults = []
-      this.showSuggestions = false
+    clearHistory() {
+      this.searchHistory = []
+      this.saveSearchHistoryToStorage()
     },
-    performSearch() {
+
+    async performSearch() {
+
       const { keyword, tag, date } = this.searchForm
-      
+
+      if (this.isSearching) return
       if (!keyword.trim() && !tag && !date) {
         uni.showToast({ title: '请输入搜索条件', icon: 'none' })
         return
       }
 
       this.showSuggestions = false
-      
-      // 显示加载状态
+      this.isSearching = true
       uni.showLoading({ title: '搜索中...' })
 
-      // 模拟搜索延迟
-      setTimeout(() => {
-        let results = [...this.allPosts]
-
-        if (keyword.trim()) {
-          const keywordLower = keyword.toLowerCase()
-          results = results.filter(post => {
-            return (
-              post.name.toLowerCase().includes(keywordLower) ||
-              (post.text && post.text.toLowerCase().includes(keywordLower))
-            )
-          })
+      try {
+        const resp = await searchApi({
+          keyword: keyword.trim(),
+          tag,
+          date,
+          page: 1,
+          pageSize: 20
+        })
+        if (resp && resp.success === false) {
+          uni.showToast({ title: resp?.message || '搜索失败', icon: 'none' })
+          return
         }
+        const rawPosts = resp?.data?.results || []
+        this.searchResults = this.normalizePosts(rawPosts)
+        this.userResults = resp?.data?.users || []
 
-        if (tag) {
-          results = results.filter(post => post.tag === tag)
-        }
-
-        if (date) {
-          // 日期搜索（简化处理，实际应该根据动态的真实发布时间进行筛选）
-          // 这里可以根据 date 字段进行筛选
-          // results = results.filter(post => {
-          //   const postDate = post.createdAt // 假设有 createdAt 字段
-          //   return postDate && postDate.startsWith(date)
-          // })
-        }
-
-        this.searchResults = results
         this.hasSearched = true
-
         this.saveSearchHistory({
           keyword: keyword.trim(),
           tag,
           date
         })
-
-        uni.hideLoading()
         uni.showToast({ 
-          title: `找到 ${results.length} 条结果`, 
+          title: `用户${this.userResults.length} · 动态${this.searchResults.length}`, 
           icon: 'none',
           duration: 1500
         })
-      }, 500)
+      } catch (e) {
+        // 去掉误报，仅打印日志便于排查
+        console.error('search failed', e)
+      } finally {
+        this.isSearching = false
+        uni.hideLoading()
+      }
     },
+
     clearResults() {
       this.hasSearched = false
       this.searchResults = []
       this.showSuggestions = false
+    // ...
     },
-    highlightKeyword(text) {
-      if (!this.searchForm.keyword || !text) return text
-      const keyword = this.searchForm.keyword
-      const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const regex = new RegExp(`(${escapedKeyword})`, 'gi')
-      return text.replace(regex, '<span style="color: #667eea; font-weight: 600;">$1</span>')
-    },
-    getTagIcon(tag) {
-      const icons = {
-        '户外': '🏔️',
-        '美食': '🍜',
-        '旅行': '✈️',
-        '摄影': '📷',
-        '运动': '🏃',
-        '学习': '📚'
-      }
-      return icons[tag] || '🏷️'
-    },
-    previewImage(urls, current) {
-      uni.previewImage({
-        urls: urls,
-        current: current
-      })
-    },
-    toggleLike(item) {
-      item.liked = !item.liked
-      item.likes += item.liked ? 1 : -1
-      this.$forceUpdate()
-    },
-    handleComment(item) {
-      uni.navigateBack({
-        success: () => {
-          uni.$emit('openComment', { postId: item.id })
-        }
-      })
-    },
-    handleShare(item) {
-      uni.showToast({ title: '分享功能待实现', icon: 'none' })
-    },
-    goBack() {
-      uni.navigateBack()
-    },
-    formatHistoryText(item) {
-      let text = ''
-      if (item.keyword) text += item.keyword
-      if (item.tag) text += (text ? ' · ' : '') + `#${item.tag}`
-      if (item.date) {
-        text += (text ? ' · ' : '') + `📅 ${item.date}`
-      }
-      return text || '综合搜索'
-    },
-    useHistoryItem(item) {
-      this.searchForm = {
-        keyword: item.keyword || '',
-        tag: item.tag || '',
-        date: item.date || ''
-      }
-      this.performSearch()
-    },
-    deleteHistoryItem(index) {
-      this.searchHistory.splice(index, 1)
+    saveSearchHistory(record) {
+      if (!record) return
+      const { keyword = '', tag = '', date = '' } = record
+      if (!keyword && !tag && !date) return
+      const newItem = { keyword, tag, date }
+      // 去重：相同 keyword/tag/date 置顶
+      this.searchHistory = [
+        newItem,
+        ...this.searchHistory.filter(
+          i => !(i.keyword === keyword && i.tag === tag && i.date === date)
+        )
+      ].slice(0, 20)
       this.saveSearchHistoryToStorage()
-    },
-    clearHistory() {
-      this.searchHistory = []
-      this.saveSearchHistoryToStorage()
-      uni.showToast({ title: '已清除搜索历史', icon: 'success' })
-    },
-    saveSearchHistory(searchItem) {
-      const exists = this.searchHistory.some(item => 
-        item.keyword === searchItem.keyword &&
-        item.tag === searchItem.tag &&
-        item.date === searchItem.date
-      )
-      
-      if (!exists) {
-        this.searchHistory.unshift(searchItem)
-        if (this.searchHistory.length > 10) {
-          this.searchHistory = this.searchHistory.slice(0, 10)
-        }
-        this.saveSearchHistoryToStorage()
-      }
     },
     saveSearchHistoryToStorage() {
       try {
@@ -559,6 +470,73 @@ export default {
         }
       } catch (e) {
         console.error('加载搜索历史失败', e)
+      }
+    },
+
+    selectSuggestion(val) {
+      this.searchForm.keyword = val
+      this.showSuggestions = false
+      this.performSearch()
+    },
+
+    highlightKeyword(text) {
+      // 保持简单返回原文本，可按需高亮关键词
+      return text || ''
+    },
+    
+    getTagIcon(tag) {
+      const map = {
+        美食: '🍜',
+        旅行: '✈️',
+        运动: '🏃',
+        摄影: '📷',
+        日常: '📝',
+        学习: '📚',
+        工作: '💼',
+        户外: '⛰️',
+        音乐: '🎵',
+        电影: '🎬',
+        读书: '📖'
+      }
+      return map[tag] || '🏷️'
+    },
+
+    normalizePosts(list = []) {
+      return sharedNormalizePosts(list).map(p => ({
+        ...p,
+        name: p.name || p.user?.username || p.username || '匿名',
+        avatar: p.avatar || p.user?.avatar || this.defaultAvatar,
+        time: p.time || p.timesince || p.created_at || '',
+        tag: p.tag || '',
+        tags: Array.isArray(p.tags) ? p.tags : (p.tags ? [p.tags] : []),
+        text: p.text || p.content || '',
+        location: p.location || '',
+        likes: p.likes_count || p.likes || 0,
+        comments: p.comments_count || p.comments || 0,
+        liked: p.is_liked || p.liked || false
+      }))
+    },
+
+    getMediaSrc(media) {
+      // 后端 video 字段可能是字符串或数组，统一取第一个
+      if (Array.isArray(media)) return media[0] || ''
+      return media || ''
+    },
+
+    async handleAddFriend(user) {
+      if (this.adding) return
+      this.adding = true
+      try {
+        const resp = await sendFriendRequestApi({ toUserId: user.id })
+        if (resp?.success) {
+          uni.showToast({ title: '申请已发送', icon: 'success' })
+        } else {
+          uni.showToast({ title: resp?.message || '发送失败', icon: 'none' })
+        }
+      } catch (e) {
+        uni.showToast({ title: '发送失败', icon: 'none' })
+      } finally {
+        this.adding = false
       }
     }
   }
@@ -648,6 +626,38 @@ export default {
   font-size: 30rpx;
   line-height: 1.6;
   margin-bottom: 16rpx;
+}
+
+.location-row {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+  margin: 6rpx 0 12rpx 0;
+  color: #666;
+  font-size: 26rpx;
+}
+
+.location-icon {
+  font-size: 26rpx;
+}
+
+.location-text {
+  color: #666;
+}
+
+.tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin: 6rpx 0 12rpx 0;
+}
+
+.tag {
+  padding: 8rpx 14rpx;
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+  border-radius: 12rpx;
+  font-size: 24rpx;
 }
 
 .media-grid {

@@ -23,6 +23,26 @@
         <text class="char-count">{{ content.length }}/500</text>
       </view>
 
+      <!-- 可见性选择 -->
+      <view class="visibility-section">
+        <view class="visibility-header">
+          <text class="visibility-title">可见范围</text>
+          <text class="visibility-desc">公开/好友/仅自己</text>
+        </view>
+        <view class="visibility-options">
+          <view
+            v-for="option in visibilityOptions"
+            :key="option.value"
+            class="visibility-chip"
+            :class="{ active: visibility === option.value }"
+            @tap="setVisibility(option.value)"
+          >
+            <text class="chip-label">{{ option.label }}</text>
+            <text class="chip-sub" v-if="option.sub">{{ option.sub }}</text>
+          </view>
+        </view>
+      </view>
+
       <!-- 标签区域 -->
       <view class="tag-section">
         <view class="tag-header">
@@ -142,6 +162,12 @@ export default {
       images: [],
       video: '',
       videoPoster: '',
+      visibility: 'public',
+      visibilityOptions: [
+        { value: 'public', label: '公开', sub: '所有人可见' },
+        { value: 'friends', label: '好友可见', sub: '仅好友和自己' },
+        { value: 'private', label: '仅自己', sub: '只有自己可见' }
+      ],
       selectedTags: [],
       showTagModal: false,
       newTagName: '',
@@ -265,6 +291,9 @@ export default {
         urls: this.images
       })
     },
+    setVisibility(value) {
+      this.visibility = value
+    },
     showTagSelector() {
       this.showTagModal = true
     },
@@ -351,7 +380,8 @@ export default {
           images: uploadedImages,
           video: videoUrl,
           videoPoster: videoPosterUrl,
-          tags: this.selectedTags
+          tags: this.selectedTags,
+          visibility: this.visibility
         }
 
         const res = await createPost(payload)
@@ -377,7 +407,8 @@ export default {
             isMine: true,
             likes: 0,
             comments: 0,
-            liked: false
+            liked: false,
+            visibility: payload.visibility
           }
         })
 
@@ -405,6 +436,66 @@ export default {
   background: #f5f7fb;
   display: flex;
   flex-direction: column;
+}
+
+.visibility-section {
+  background: #fff;
+  border-radius: 24rpx;
+  padding: 24rpx 30rpx;
+  margin-bottom: 30rpx;
+  box-shadow: 0 10rpx 30rpx rgba(0, 0, 0, 0.05);
+}
+
+.visibility-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+}
+
+.visibility-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333;
+}
+
+.visibility-desc {
+  font-size: 24rpx;
+  color: #999;
+}
+
+.visibility-options {
+  display: flex;
+  gap: 14rpx;
+  flex-wrap: wrap;
+}
+
+.visibility-chip {
+  padding: 14rpx 20rpx;
+  border-radius: 16rpx;
+  background: #f6f7fb;
+  border: 1rpx solid #eef0f5;
+  min-width: 180rpx;
+  box-sizing: border-box;
+}
+
+.visibility-chip.active {
+  background: rgba(102, 126, 234, 0.15);
+  border-color: #667eea;
+}
+
+.chip-label {
+  display: block;
+  font-size: 28rpx;
+  color: #333;
+  font-weight: 600;
+}
+
+.chip-sub {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #888;
 }
 
 /* 自定义导航栏 */

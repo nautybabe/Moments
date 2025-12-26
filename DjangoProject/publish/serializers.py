@@ -10,10 +10,11 @@ class CreatePostSerializer(serializers.ModelSerializer):
     video = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     videoPoster = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     tags = serializers.ListField(child=serializers.CharField(), required=False, default=[])
+    visibility = serializers.ChoiceField(choices=['public', 'friends', 'private'], required=False, default='public')
     
     class Meta:
         model = Post
-        fields = ['content', 'images', 'video', 'videoPoster', 'tags']
+        fields = ['content', 'images', 'video', 'videoPoster', 'tags', 'visibility']
     
     def validate(self, data):
         """验证输入数据"""

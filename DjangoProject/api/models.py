@@ -17,10 +17,17 @@ class Profile(models.Model):
 
 class Post(models.Model):
     """动态模型"""
+    VISIBILITY_CHOICES = (
+        ('public', '公开'),
+        ('friends', '好友可见'),
+        ('private', '仅自己可见'),
+    )
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='api_posts')
     text = models.TextField(blank=True, default='')
     type = models.CharField(max_length=20, default='text')  # image, text, etc.
     media = models.JSONField(default=list)  # 存储媒体URL列表
+    visibility = models.CharField(max_length=10, choices=VISIBILITY_CHOICES, default='public')
     created_at = models.DateTimeField(auto_now_add=True)
     likes_count = models.IntegerField(default=0)
     comments_count = models.IntegerField(default=0)
@@ -62,6 +69,39 @@ class Tag(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Friendship(models.Model):
+    """好友关系（双向，同意后视为好友）"""
+    STATUS_CHOICES = (
+        ('pending', '待确认'),
+        ('accepted', '已同意'),
+        ('rejected', '已拒绝'),
+    )
+    from_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='friend_requests_sent')
+    to_user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='friend_requests_received')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('from_user', 'to_user')
+
+    def __str__(self):
+        return f"{self.from_user.username} -> {self.to_user.username} ({self.status})"
+
+
+class Follow(models.Model):
+    """关注关系（单向）；互相关注即好友"""
+    follower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='following_set')
+    following = models.ForeignKey(User, on_delete=models.CASCADE, related_name='followers_set')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('follower', 'following')
+
+    def __str__(self):
+        return f"{self.follower.username} -> {self.following.username}"
 
 
 @receiver(post_save, sender=User)

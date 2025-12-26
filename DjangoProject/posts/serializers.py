@@ -16,11 +16,12 @@ class PostSerializer(serializers.ModelSerializer):
     name = serializers.ReadOnlyField(source='user.username')
     avatar = serializers.SerializerMethodField()
     time = serializers.SerializerMethodField()
+    visibility = serializers.CharField(read_only=True)
 
     class Meta:
         model = Post
         # 匹配文档的响应字段
-        fields = ['id', 'name', 'avatar', 'time', 'text', 'type', 'media', 'tag', 'likes', 'comments', 'liked']
+        fields = ['id', 'name', 'avatar', 'time', 'text', 'type', 'media', 'tag', 'visibility', 'likes', 'comments', 'liked']
 
     # 获取当前用户是否已点赞
     def get_liked(self, obj):
@@ -29,8 +30,12 @@ class PostSerializer(serializers.ModelSerializer):
             return False  # 未登录返回false
         return Like.objects.filter(post=obj, user=request.user).exists()
 
-    # 生成用户头像（匹配文档格式）
+    # 生成用户头像（优先用户设置的头像）
     def get_avatar(self, obj):
+        profile = getattr(obj.user, 'profile', None)
+        avatar = getattr(profile, 'avatar', '') if profile else ''
+        if avatar:
+            return avatar
         return f"https://picsum.photos/200?{obj.user.id}"
 
     # 时间格式化（匹配文档的“2分钟前”格式）

@@ -3,11 +3,18 @@ from django.contrib.auth.models import User
 from datetime import datetime
 
 class Post(models.Model):
+    VISIBILITY_CHOICES = (
+        ('public', '公开'),
+        ('friends', '好友可见'),
+        ('private', '仅自己可见'),
+    )
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='posts')
     text = models.TextField()
     type = models.CharField(max_length=10, choices=[('image', '图片'), ('video', '视频')])
     media = models.JSONField(default=list)  # 存储媒体URL列表
     tag = models.CharField(max_length=20)
+    visibility = models.CharField(max_length=10, choices=VISIBILITY_CHOICES, default='public')
     likes = models.IntegerField(default=0)
     comments = models.IntegerField(default=0)
     created_time = models.DateTimeField(auto_now_add=True)

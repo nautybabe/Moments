@@ -36,7 +36,7 @@ urlpatterns = [
     path('api/', include('api.urls')),
     path('api/setting/', include('setting.urls')),
     path('api/user/', include('my.urls')),  # 我的应用接口
-    path('api/posts/', include('posts.urls')),  # 发现应用接口（放在发布接口之前，确保 /api/posts/ 先匹配列表视图）
+    # 统一使用 api 应用的 posts 接口，避免 posts 应用重复表/路由
     path('api/publish/', include('publish.urls')),  # 发布应用接口
     path('api/notifications/', include('notifications.urls')),  # 通知应用接口
 ]

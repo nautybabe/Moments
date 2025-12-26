@@ -48,7 +48,7 @@ INSTALLED_APPS = [
     "my",
     "notifications",
     "publish",
-    "posts",  # 发现: posts应用
+    # "posts",  # 旧发现应用已弃用，改用 api.Post，避免重复表
     "setting",
 ]
 

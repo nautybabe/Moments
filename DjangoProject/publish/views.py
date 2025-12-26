@@ -66,6 +66,7 @@ def create_post(request):
     if serializer.is_valid():
         validated_data = serializer.validated_data
         user = request.user
+        visibility = validated_data.get('visibility', 'public')
         
         # 确定动态类型
         post_type = 'text'
@@ -92,7 +93,8 @@ def create_post(request):
             user=user,
             text=validated_data.get('text', ''),
             type=post_type,
-            media=media
+            media=media,
+            visibility=visibility
         )
         
         # 处理标签
@@ -101,8 +103,9 @@ def create_post(request):
             tag, created = Tag.objects.get_or_create(name=tag_name.strip())
             post.tags.add(tag)
         
-        # 序列化返回结果
+        # 序列化返回结果（统一使用 api.Post）
         post_serializer = PostSerializer(post, context={'request': request})
+
         return Response({
             'success': True,
             'message': '发布成功',

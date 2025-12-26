@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
-from .models import Profile, Post, Like, Comment
+from .models import Profile, Post, Like, Comment, Tag, Friendship
 
 
 class ProfileSerializer(serializers.ModelSerializer):
@@ -121,17 +121,34 @@ class LikeSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'user', 'created_at']
 
 
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ['id', 'name']
+
+
+class FriendshipSerializer(serializers.ModelSerializer):
+    from_user = serializers.PrimaryKeyRelatedField(read_only=True)
+    to_user = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+
+    class Meta:
+        model = Friendship
+        fields = ['id', 'from_user', 'to_user', 'status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'from_user', 'status', 'created_at', 'updated_at']
+
+
 class PostSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     comment = serializers.SerializerMethodField(read_only=True)
     is_liked = serializers.SerializerMethodField(read_only=True)
     time = serializers.SerializerMethodField(read_only=True)
     tags = serializers.SerializerMethodField(read_only=True)
+    visibility = serializers.CharField(read_only=True)
 
     class Meta:
         model = Post
-        fields = ['id', 'user', 'text', 'type', 'media', 'created_at', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags']
-        read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags']
+        fields = ['id', 'user', 'text', 'type', 'media', 'visibility', 'created_at', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags']
+        read_only_fields = ['id', 'user', 'likes_count', 'comments_count', 'comment', 'is_liked', 'time', 'tags', 'visibility']
 
     def get_comment(self, obj):
         """获取该动态的最新3条评论"""
@@ -169,10 +186,26 @@ class PostSerializer(serializers.ModelSerializer):
 
 
 class CreatePostSerializer(serializers.ModelSerializer):
+    tags = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+    visibility = serializers.ChoiceField(choices=Post.VISIBILITY_CHOICES, default='public')
+
     class Meta:
         model = Post
-        fields = ['text', 'type', 'media']
+        fields = ['text', 'type', 'media', 'visibility', 'tags']
 
     def create(self, validated_data):
+        tags_data = validated_data.pop('tags', [])
         validated_data['user'] = self.context['request'].user
-        return Post.objects.create(**validated_data)
+        post = Post.objects.create(**validated_data)
+        # 处理标签：按名称获取或创建
+        if tags_data:
+            tag_objs = []
+            for name in tags_data:
+                name = name.strip()
+                if not name:
+                    continue
+                tag_obj, _ = Tag.objects.get_or_create(name=name)
+                tag_objs.append(tag_obj)
+            if tag_objs:
+                post.tags.set(tag_objs)
+        return post

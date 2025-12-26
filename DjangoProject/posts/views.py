@@ -4,12 +4,13 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import F
 from .models import Post, Comment, Like
+from api.models import Friendship, Follow
+
 from .serializers import PostSerializer, CommentSerializer, LikeResponseSerializer
 from notifications.models import Notification
 from .pagination import StandardResultsSetPagination
 from rest_framework import permissions
-from django.db.models import F
-from notifications.models import Notification
+from django.db.models import Q
 
 
 class PostListView(generics.ListAPIView):
@@ -19,7 +20,33 @@ class PostListView(generics.ListAPIView):
     permission_classes = []  # 新增：文档要求公开访问，不加权限
 
     def get_queryset(self):
-        return Post.objects.all().order_by('-created_time')  # 保持不变（你的模型字段是created_time，没问题）
+        user = getattr(self.request, 'user', None)
+        public_q = Q(visibility='public')
+        qs = Post.objects.filter(public_q).order_by('-created_time')
+        if user and user.is_authenticated:
+            # 好友 id 集合
+            friendships = Friendship.objects.filter(
+                Q(status='accepted') & (Q(from_user=user) | Q(to_user=user))
+            )
+            friend_ids = set()
+            for fr in friendships:
+                if fr.from_user_id == user.id:
+                    friend_ids.add(fr.to_user_id)
+                else:
+                    friend_ids.add(fr.from_user_id)
+            # 互关也视作好友
+            following_ids = set(Follow.objects.filter(follower=user).values_list('following_id', flat=True))
+            follower_ids = set(Follow.objects.filter(following=user).values_list('follower_id', flat=True))
+            mutual_ids = following_ids.intersection(follower_ids)
+            friend_ids.update(mutual_ids)
+
+            return Post.objects.filter(
+                Q(user=user) |
+                public_q |
+                (Q(visibility='friends') & Q(user_id__in=friend_ids))
+            ).order_by('-created_time')
+        # 未登录仅公开
+        return qs
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
